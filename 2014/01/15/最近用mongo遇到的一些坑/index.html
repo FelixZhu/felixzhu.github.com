@@ -1,0 +1,238 @@
+<!DOCTYPE HTML>
+<html>
+<head>
+  <meta charset="utf-8">
+  
+  <title>最近用mongo遇到的一些坑 | Felix&#39;s Blog</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+  
+  
+  <!-- <link rel="stylesheet" href="http://yui.yahooapis.com/pure/0.3.0/pure-min.css" type="text/css">-->
+  <link rel="stylesheet" href="/css/pure-min.css" type="text/css">
+  <link rel="stylesheet" href="/css/biture.css" type="text/css">
+  <!--[if lt IE 9]><script src="//html5shiv.googlecode.com/svn/trunk/html5.js"></script><![endif]-->
+</head>
+
+
+<body>
+  <header id="header">
+    <div class="wrap">
+  <div class="inner">
+    <a class="brand" href="/">Felix&#39;s Blog</a>
+<ul class="nav-menu">
+
+
+    <li><a href="/">home</a></li>
+
+
+</ul>
+
+<div style="display: inline-block; float:right; padding: 3px 0 0 0">
+<ul class="nav-menu">
+
+
+    <li><a href="//github.com/felixzhu/">github</a></li>
+
+
+
+    <li><a href="//weibo.com/zhuqianbb/">weibo</a></li>
+
+
+  <li><a class="various" href="#fbox-tagcloud">tags</a></li>
+</ul>
+</div>
+
+  </div>
+</div>
+
+<div class="tagcloud" id="fbox-tagcloud" style="margin:10px; display:none; overflow: hidden"><a href="/tags/NoSQL/" style="font-size: 24.00px;">NoSQL</a><a href="/tags/杂谈/" style="font-size: 12.00px;">杂谈</a></div>
+
+  </header>
+  <div id="main-content" class="wrap">
+  <div class="inner">
+    <article class="post">
+  <div class="pure-g-r">
+
+    <!-- article: meta -->
+    <div class="pure-u-1-12 article-meta">
+      <div class="date"><time datetime="2014-01-15T15:49:28.000Z">
+        <div class="day">15</div>
+        <div class="month">Jan 2014</div>
+      </time></div>
+      <div class="article-tags">
+        
+  
+    <a href='/tags/NoSQL/' class='pure-button pull-right' style='margin:3px;'>NoSQL</a>
+  
+
+
+      </div>
+    </div>
+
+    <!-- article: main -->
+    <div class="pure-u-11-12">
+      <header><div class="article-title">
+        
+  
+    <h1 class="title">最近用mongo遇到的一些坑</h1>
+  
+
+      </div></header>
+      <div class="article-entry">
+        
+          <p>首先吐槽一下不知道为什么那么多人在黑mongo，太多太多，多得我都不敢用。</p>
+<p>之前公司的一个项目经历了从Cassandra迁移到mongo的过程，由于后期主要是我个人负责，对mongo这个数据库也算是有了很多了解，当然首先我们的这个系统不大，也就是PV百万的级别，个人也是纯属菜鸟，大家兼听则明。
+<a id="more"></a>
+首先介绍一下我们准备往mongo迁移的项目: <a href="http://quan.sohu.com" target="_blank">搜狐圈子</a>，web框架是tornado, driver是pymongo, 还用了mongokit这个ORM, 从技术的角度来说是一个很普通的web网站，后台只负责输出Rest接口，模板渲染之类的都是单独的node.js项目来完成。好了废话不多说，主要是罗列一些在实际开发中遇到过的问题:</p>
+<h3 id="1-save">1. 看起来美好的save</h3>
+<p>由于我们的系统使用了mongokit，所以这样一段很美好的orm代码就出现了:</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre>1
+2
+3
+</pre></td><td class="code"><pre>topic = conn.Topic.find_one({<span class="string">'_id'</span>: <span class="string">'123'</span>}, fields=[<span class="string">'title'</span>])
+topic.title = <span class="string">'mongodb best practices'</span>
+topic.save()
+</pre></td></tr></table></figure>
+
+<p>我想大家都看出问题来了，这段代码的后果就是topic里面除了title和_id之外的属性全部都被删掉了
+因为都没有对这件事情做判断，所以save在我看来其实是一个很危险的操作，在实际的编码中这样的修改代码应该用update来实现。那么如何防止这样的悲剧发生了，一个办法是重写save操作，判断一下当前实例是否包含了所有的fields，但是这样却带来了一个更可怕的事情，就是与mongo的schemaless有了冲突，也显得不可取，所以还是尽量用update来实现更新比较合适。实在要这样写，也切忌query语句不要传fields参数。</p>
+<h3 id="2-">2. 写操作返回可能并不代表着写成功</h3>
+<p>其实这是之前很多人黑mongo的一个地方，因为mongo老版本的时候确实是默认还没有完成写操作就直接返回，但是现在的版本早已改变了策略。原因就是mongo有一个值叫做<a href="http://docs.mongodb.org/manual/core/write-concern/" target="_blank">write_concern</a>, 如果设置为0，那么就算出错了driver这一端也是不知道的，老版本的默认值就是0，但是现在的版本默认值都已经是1了，也就是说会保证在主结点上是写成功了的, 但是大家在实际使用中还是要知道这个事情.</p>
+<h3 id="3-query-">3. query语句的结果并不像你想像的那样</h3>
+<p>我们假设这样一个结构:</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre>1
+2
+3
+</pre></td><td class="code"><pre>{ "<span class="attribute">_id</span>" : <span class="value"><span class="number">1</span></span>, "<span class="attribute">students</span>" : <span class="value">[ { "<span class="attribute">name</span>" : <span class="value"><span class="string">"john"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">102</span></span>}, { "<span class="attribute">name</span>" : <span class="value"><span class="string">"anna"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">110</span> </span>} ] </span>}
+{ "<span class="attribute">_id</span>" : <span class="value"><span class="number">3</span> </span>}
+{ "<span class="attribute">_id</span>" : <span class="value"><span class="number">4</span></span>, "<span class="attribute">students</span>" : <span class="value">[ { "<span class="attribute">name</span>" : <span class="value"><span class="string">"barney"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">102</span></span>}, { "<span class="attribute">name</span>" : <span class="value"><span class="string">"john"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">118</span> </span>} ] </span>}
+</pre></td></tr></table></figure>
+
+<p>如果你的query语句是: {students.name: john, students.school: 102}
+那么返回的结果是什么呢? 是这样:</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre>1
+2
+</pre></td><td class="code"><pre>{ "<span class="attribute">_id</span>" : <span class="value"><span class="number">1</span></span>, "<span class="attribute">students</span>" : <span class="value">[ { "<span class="attribute">name</span>" : <span class="value"><span class="string">"john"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">102</span></span>}, { "<span class="attribute">name</span>" : <span class="value"><span class="string">"anna"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">110</span> </span>} ] </span>}
+{ "<span class="attribute">_id</span>" : <span class="value"><span class="number">4</span></span>, "<span class="attribute">students</span>" : <span class="value">[ { "<span class="attribute">name</span>" : <span class="value"><span class="string">"barney"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">102</span></span>}, { "<span class="attribute">name</span>" : <span class="value"><span class="string">"john"</span></span>, "<span class="attribute">school</span>" : <span class="value"><span class="number">118</span> </span>} ] </span>}
+</pre></td></tr></table></figure>
+
+<p>没错，因为第二个里面也可以匹配到name为john和school为102的记录，虽然不在同一个dict里面但是却是也能匹配，那么如果我要在同一个dict里面能够匹配两个条件的结果该怎么办呢?</p>
+<p>{student: {$elematch: {name: john, school: 102}}}</p>
+<p>这里只是举了一个例子，其实在mongo的查询语句这个点上还有很多坑，比方说你有一个多级嵌套的list(list里面套list)或者类似的复杂结构，查询语句的返回值并不那么直观(你也没必要去了解)，所以我们在使用NoSQL的时候一定要按照业务来制定简单明了的数据库存储方式</p>
+<h3 id="4-index-">4. Index决定了业务的承载能力</h3>
+<p>在mongo数据库中index十分十分重要，大量查询的query语句必须是index完全覆盖的才行，否则系统必然是处在崩溃边缘，上线前一定要好好检查index的设计，限于篇幅我就不介绍怎么设计好的index了，文章最后我推荐了一篇文章，大家只要记住这件事情的重要性，每个query都把explain打出来看一看，切记关注最为重要的几个参数: n/nscanned/nscannedObjects/ScanAndOrder, 尤其是ScanAndOrder千万不能为True，这对于一个系统来说很可能成为瓶颈。</p>
+<p>还有就是大家一定要清楚index是怎么建立和工作的</p>
+<p><strong>比方说Multikey Indexes, 假如这样一个结构:</strong></p>
+<figure class="highlight"><table><tr><td class="gutter"><pre>1
+2
+</pre></td><td class="code"><pre><span class="rules">{<span class="rule"><span class="attribute">a</span>:<span class="value"> [<span class="number">1</span>, <span class="number">2</span>], b: <span class="number">1</span></span></span></span>}
+<span class="rules">{<span class="rule"><span class="attribute">a</span>:<span class="value"> <span class="number">1</span>, b: [<span class="number">1</span>, <span class="number">2</span>]</span></span></span>}
+</pre></td></tr></table></figure>
+
+<p>如果我建立一个{ a: 1, b: 1 }的index，那是可以的，对于list的情况其实就相当于有两个索引，但是如果结构是这样:</p>
+<figure class="highlight"><table><tr><td class="gutter"><pre>1
+</pre></td><td class="code"><pre><span class="rules">{<span class="rule"><span class="attribute">a</span>:<span class="value"> [<span class="number">1</span>, <span class="number">2</span>], b: [<span class="number">1</span>, <span class="number">2</span>]</span></span></span>}
+</pre></td></tr></table></figure>
+
+<p>再要建立{ a: 1, b: 1 }的index就是违法的了，因为mongo不允许在同一个index中有多个list fields，当然如果你知道mongo其实是对list field里面的每个字段都加一个索引的话，你也就能理解为什么不允许了。</p>
+<p><strong>再说一个Sparse Indexes</strong></p>
+<p>如果在创建index的时候传了sparse这个参数，那么如果这个index完全覆盖了一个查询，这个查询就无法获取到全部的数据。还有就是Sparse是说这个文档完全没有这个字段，哪怕这个字段为空，还是会出现在index中。</p>
+<p><strong>再有就是index的顺序是否重要</strong></p>
+<p>其实一般来说是不重要的，但是在某些情况就会有影响，比方说一个index={a:1, b:1}, 就无法完全覆盖一个{a:1, b:-1}的排序</p>
+<p>index很重要，一定要全部弄懂才行</p>
+<h3 id="5-ensure_index-">5. 有事没事ensure_index?</h3>
+<p>首先要知道创建index是会block掉其他参数的，如果你想要在创建index的时候不影响线上环境，一定要记得加上background参数。</p>
+<p>然后我在用mongokit的时候就在想，为什么mongokit不自动调用ensure_index，而要手动调用generate_index来创建index，后来看到SO上面有人说是因为ensure_index并不保证不会重建操作，所以创建index这样的大操作一定要专门找时间用background来创建，也不要随时随地都去ensure_index一下。</p>
+<p><em>PS: 其实我在mongo的文档中并没有找到相关的论述，只是保险起见吧</em></p>
+<h3 id="6-">6. 根据业务存储数据</h3>
+<p>其实这是NoSQL的一个宗旨，我们必须看业务要的是什么数据，来决定我应该怎么存这个数据，我们系统中有一个例子就是用户会订阅Tag(圈子)，而一个用户有可能是一个Tag的管理员，这种关系我究竟应该存在哪里？其实普适性地来说我们应该是两边都存，用户表里面有自己地管理员信息和订阅信息，而Tag表也是。但是倘若说你的系统中都是在一个Tag内才会判断当前用户是否是Tag的管理员，而不会去看一个用户管理了哪些Tag，那么在用户表里面就没必要存储这个管理员信息了。</p>
+<p>但是还有问题就是一个Tag内订阅的用户太多了，我难道要在Tag里面存一个几千条数据的list么，这种事情并不是mongo擅长的，反倒是Cassandra用来存这种数据非常爽，像这种情况我们实在没有好办法就只能通过在用户表上建index来解决咯。</p>
+<p>可能很多人会说为什么不所有事情都靠index来解决，就我个人的经验来说，index能少建就少建，冗余的存储能够帮上很大的忙。</p>
+<h3 id="7-mongo-">7. mongo的一些限制</h3>
+<p>在使用mongo之前容我问你几个问题:</p>
+<ol>
+<li>一个db下的collection数目是否有限制？</li>
+<li>一个document的大小限制是多少？</li>
+<li>一个collection可以创建多少index？</li>
+</ol>
+<p>还有很多这样的问题必须在使用前弄清楚, 请查阅<a href="http://docs.mongodb.org/manual/reference/limits/" target="_blank">MongoDB Limits and Thresholds</a></p>
+<h3 id="8-">8. 最后推荐几篇文章:</h3>
+<p><a href="http://java.dzone.com/articles/optimizing-mongodb-compound?mz=36885-nosql" target="_blank">Optimizing MongoDB Compound Indexes</a></p>
+<p><a href="http://www.sarahmei.com/blog/2013/11/11/why-you-should-never-use-mongodb/" target="_blank">Why You Should Never Use MongoDB</a></p>
+
+        
+      </div>
+      <footer><div class="article-comment">
+        
+<section id="comment">
+  <h1 class="title">Comments</h1>
+
+  
+  <div id="disqus_thread">
+    <noscript>Please enable JavaScript to view the <a href="//disqus.com/?ref_noscript">comments powered by Disqus.</a></noscript>
+  </div>
+  
+</section>
+
+
+      </div></footer>
+    </div>
+  </div>
+</article>
+
+  </div>
+  </div>
+  <footer id="footer">
+    <div class="wrap">
+  <div class="inner" style="text-align: center">
+    
+    &copy; 2014 Felix Zhu All Rights Reserved
+    
+  </div>
+</div>
+
+  </footer>
+<!-- Le javascript -->
+<!-- Placed at the end of the document so the pages load faster -->
+<script src="//ajax.googleapis.com/ajax/libs/jquery/1/jquery.min.js"></script>
+
+
+
+
+<script type="text/javascript">
+var disqus_shortname = 'felixzhu';
+
+(function(){
+  var dsq = document.createElement('script');
+  dsq.type = 'text/javascript';
+  dsq.async = true;
+  dsq.src = '//' + disqus_shortname + '.disqus.com/embed.js';
+  (document.getElementsByTagName('head')[0] || document.getElementsByTagName('body')[0]).appendChild(dsq);
+}());
+</script>
+
+
+
+
+<link rel="stylesheet" href="/package/fancybox/jquery.fancybox.css?v=2.1.5" type="text/css" media="screen" />
+<script type="text/javascript" src="/package/fancybox/jquery.fancybox.pack.js?v=2.1.5"></script>
+<script type="text/javascript">
+(function($){
+  $(".fancybox").fancybox();
+  $(".various").fancybox({
+    maxWidth  : 800,
+    maxHeight : 600,
+    fitToView : false,
+    width   : '70%',
+    height    : '70%',
+    autoSize  : true,
+    closeClick  : false,
+    openEffect  : 'none',
+    closeEffect : 'none'
+  });
+})(jQuery);
+</script>
+
+
+</body>
+</html>
